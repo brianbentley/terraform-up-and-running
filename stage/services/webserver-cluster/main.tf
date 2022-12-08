@@ -1,11 +1,27 @@
-provider "aws" {
-  region = "us-east-2"
+
+terraform {
+  backend "s3" {
+    bucket = "terraform-up-and-running-state-ef12"
+    key    = "stage/services/webserver-cluster/terraform.tfstate"
+    region = "us-east-2"
+
+    dynamodb_table = "terraform-up-and-running-locks"
+    encrypt        = true
+  }
 }
 
-variable "server_port" {
-  description = "The port the server will use for HTTP requests"
-  type        = number
-  default     = 8080
+data "terraform_remote_state" "db" {
+  backend = "s3"
+
+  config = {
+    bucket = "terraform-up-and-running-state-ef12"
+    key    = "stage/data-stores/mysql/terraform.tfstate"
+    region = "us-east-2"
+  }
+}
+
+provider "aws" {
+  region = "us-east-2"
 }
 
 data "aws_vpc" "default" {
@@ -24,11 +40,11 @@ resource "aws_launch_configuration" "example" {
   instance_type   = "t2.micro"
   security_groups = [aws_security_group.instance.id]
 
-  user_data = <<-EOF
-              #!/bin/bash
-              echo "Hello, World" > index.html
-              nohup busybox httpd -f -p ${var.server_port} &
-              EOF
+  user_data = templatefile("user-data.sh", {
+    server_port = var.server_port
+    db_address  = data.terraform_remote_state.db.outputs.address
+    db_port     = data.terraform_remote_state.db.outputs.port
+  })
 
   # Required when using a launch configuartion with an auto scaling group.
   lifecycle {
@@ -144,9 +160,3 @@ resource "aws_lb_listener_rule" "asg" {
     target_group_arn = aws_lb_target_group.asg.arn
   }
 }
-
-output "alb_dns_name" {
-  value       = aws_lb.example.dns_name
-  description = "The domain name of the load balancer"
-}
-
